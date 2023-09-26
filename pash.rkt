@@ -16,6 +16,8 @@
   [msg-or-eof ::= msg ⊥]
   [s* ::= [s ...]]
 
+  [choices ::= {natural ...}]
+
   [binding ::= (x ⟶ s)]
   [Γ ::= [binding ...]]
   [σ ::= [binding ...]]
@@ -87,35 +89,98 @@
   [(update/Γ/internal Γ [])
    Γ])
 
-(define-metafunction ddl
-  run-f : f s* -> s*
-  [(run-f f [[msg_done ... ⊥] ... [msg_in_progress ...] s_todo ...])
-   [s_concat]
-   (where s_concat [msg_done ... ... msg_in_progress ...])
-   (side-condition (equal? (term f) 'cat))]
-  [(run-f f [[msg_done ... ⊥] ...])
-   [s_concat]
-   (where s_concat [msg_done ... ... ⊥])
-   (side-condition (equal? (term f) 'cat))]
-  [(run-f f [[msg_done ... ⊥] ... [msg_in_progress ...] s_todo ...])
-   [s_grepped]
-   (where s_grepped ,(filter (λ (s) (string-contains? s "foo"))
-                             (term [msg_done ... ... msg_in_progress ...])))
-   (side-condition (equal? (term f) 'grep))]
-  [(run-f f [[msg_done ... ⊥] ...])
-   [[msg_grepped ... ⊥]]
-   (where [msg_grepped ...] ,(filter (λ (s) (string-contains? s "foo"))
-                                     (term [msg_done ... ...])))
-   (side-condition (equal? (term f) 'grep))]
-  [(run-f f [[msg_done ... ⊥] ... [msg_in_progress ...] s_todo ...])
-   [s_concat s_concat]
-   (where s_concat [msg_done ... ... msg_in_progress ...])
-   (side-condition (equal? (term f) 'tee))]
-  [(run-f f [[msg_done ... ⊥] ...])
-   [s_concat s_concat]
-   (where s_concat [msg_done ... ... ⊥])
-   (side-condition (equal? (term f) 'tee))])
+(define-syntax-rule (define-run/choice
+                      run-name
+                      choice-name
+                      (op
+                       [s*-ongoing #:choice choice-expr body ...]
+                       [s*-end end-body ...])
+                      ...)
+  (begin
+    (define-metafunction ddl
+      run-name : f s* -> s*
+      {~@
+       [(run-f f s*-ongoing)
+        body ...
+        (side-condition (equal? (term f) 'op))]
+       [(run-f f s*-end)
+        end-body ...
+        (side-condition (equal? (term f) 'op))]}
+      ...)
+    (define-metafunction ddl
+      choice-name : f s* -> choices
+      {~@
+       [(choice f s*-ongoing)
+        choice-expr
+        (side-condition (equal? (term f) 'op))]
+       [(choice f s*-end)
+        {} ;; ensures part of the constraint under fig 3 (pg 10)
+        (side-condition (equal? (term f) 'op))]}
+      ...)))
 
+(define-run/choice
+  run-f choice
+  (cat {[[msg_done ... ⊥] ... [msg_in_progress ...] s_todo ...]
+        #:choice ,(list (length (term ([msg_done ...] ...))))
+        [s_concat]
+        (where s_concat [msg_done ... ... msg_in_progress ...])}
+       {[[msg_done ... ⊥] ...]
+        [s_concat]
+        (where s_concat [msg_done ... ... ⊥])})
+
+  (grep {[[msg_done ... ⊥] ... [msg_in_progress ...] s_todo ...]
+        #:choice ,(list (length (term ([msg_done ...] ...))))
+         [s_grepped]
+         (where s_grepped ,(filter (λ (s) (string-contains? s "foo"))
+                                   (term [msg_done ... ... msg_in_progress ...])))}
+        {[[msg_done ... ⊥] ...]
+         [[msg_grepped ... ⊥]]
+         (where [msg_grepped ...] ,(filter (λ (s) (string-contains? s "foo"))
+                                           (term [msg_done ... ...])))})
+
+  (tee {[[msg_done ... ⊥] ... [msg_in_progress ...] s_todo ...]
+        #:choice ,(list (length (term ([msg_done ...] ...))))
+        [s_concat s_concat]
+        (where s_concat [msg_done ... ... msg_in_progress ...])}
+       {[[msg_done ... ⊥] ...]
+        [s_concat s_concat]
+        (where s_concat [msg_done ... ... ⊥])})
+
+  (interleave {[s_l s_r]
+               #:choice ,(list (if (<= (length (term s_l))
+                                       (length (term s_r)))
+                                   (if (member '⊥ (term s_l))
+                                       1
+                                       0)
+                                   1))
+               [,(interleave (term s_l) (term s_r))]}
+              {[[msg_done_l ... ⊥] [msg_done_r ... ⊥]]
+               [,(interleave (term [msg_done_l ... ⊥])
+                            (term [msg_done_r ... ⊥]))]}))
+
+(define (interleave l1 l2)
+  (reverse
+   (let loop ([res empty]
+              [rest-l l1]
+              [rest-r l2]
+              [left? #t])
+     (match rest-l
+       [(or '() (cons '⊥ _))
+        (append (reverse rest-r) res)]
+       [(cons msg-l more-l)
+        (if left?
+            (loop (cons msg-l res)
+                  more-l
+                  rest-r
+                  (not left?))
+            (match rest-r
+              [(or '() (cons '⊥ _))
+               (append (reverse rest-l) res)]
+              [(cons msg-r more-r)
+               (loop (cons msg-r res)
+                     rest-l
+                     more-r
+                     (not left?))]))]))))
 
 (define-logger ddl)
 
@@ -135,22 +200,57 @@
           binding_σ_>k
           ...]}
 
-        (where [_ ... ([x_out ...] ← f [x_in_before ... x_k x_in_after ...]) _ ...] E)
-        (side-condition (log-ddl-debug @~a{E matches, with x_out... = @(term [x_out ...]), x_k = @(term x_k)}))
+        (where [_ ... ([x_out ...] ← f [x_in_<k ... x_k x_in_>k ...]) _ ...] E)
+        (side-condition (log-ddl-debug @~a{
+                                           E matches, with x_out... = @(term [x_out ...]), @;
+                                           x_k = @(term x_k)}))
+        (side-condition
+         (log-ddl-debug @~a{
+                            Checking that x_k is in the choice set of @(term f)... @;
+                            @(length (term (x_in_<k ...))) @;
+                            vs @(term (choice f (bindings/σ σ [x_in_<k ... x_k x_in_>k ...])))
+                            }))
+        ;; todo: see note below
+        (side-condition (member (length (term (x_in_<k ...)))
+                                (term (choice f (bindings/σ σ [x_in_<k ... x_k x_in_>k ...])))))
+
         (where/error [_ ... (x_k ⟶ s_k) _ ...] Γ)
         (side-condition (log-ddl-debug @~a{Γ matches, with s_k = @(term s_k)}))
         (where/error [binding_σ_<k ... (x_k ⟶ s_k_before_step) binding_σ_>k ...] σ)
-        (side-condition (log-ddl-debug @~a{σ matches, with s_k_before_step = @(term s_k_before_step)}))
+        (side-condition
+         (log-ddl-debug @~a{σ matches, with s_k_before_step = @(term s_k_before_step)}))
         (where [msg_k_before_step ...] s_k_before_step)
         (where [msg_k_before_step ... msg-or-eof msg-or-eof_k_more ...] s_k) ;; there must be a new message in `s_k`, otherwise can't step
         (where/error s_x_k_step_message [msg-or-eof])
-        (side-condition (log-ddl-debug @~a{splitting of s_k matches, s_x_k_step_message = @(term s_x_k_step_message), and remaining after that: @(term [msg-or-eof_k_more ...])}))
+        (side-condition
+         (log-ddl-debug @~a{
+                            splitting of s_k matches, @;
+                            s_x_k_step_message = @(term s_x_k_step_message), @;
+                            and remaining after that: @(term [msg-or-eof_k_more ...])}))
 
-        (where/error [s_in_before ...] (bindings/σ σ [x_in_before ...]))
-        (where/error [s_in_after ...] (bindings/σ σ [x_in_after ...]))
-        (where/error [s_out_after_step ...] (run-f f [s_in_before ... (++ s_k_before_step s_x_k_step_message) s_in_after ...]))
-        (side-condition (log-ddl-debug @~a{Ran @(term f) with the new s_x_k_step_message new s_out_after_step = @(term [s_out_after_step ...])}))
+        (where/error [s_in_<k_σ ...] (bindings/σ σ [x_in_<k ...]))
+        (where/error [s_in_>k_σ ...] (bindings/σ σ [x_in_>k ...]))
+        (where/error [s_out_after_step ...] (run-f f [s_in_<k_σ ... (++ s_k_before_step s_x_k_step_message) s_in_>k_σ ...]))
+        (side-condition
+         (log-ddl-debug @~a{
+                            ran @(term f) with the new s_x_k_step_message, @;
+                            new s_out_after_step = @(term [s_out_after_step ...])
+                            }))
         "step")))
+
+;; The choice side condition is pretty subtle.
+;; it seems the condition is important to constrain which input interleave consumes in the reduction rule here, and afaict the choice condition encodes that constraint
+;; But actually it's doing something else here.
+;; To see why, consider this program:
+#;(term {{[stdin1 stdin2] [stdout] [([stdout] ← interleave [stdin1 stdin2])]}
+         ⊢
+         [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (stdout ⟶ [])]
+         [(stdin1 ⟶ []) (stdin2 ⟶ []) (stdout ⟶ [])]})
+;;
+;; If you check the traces, somehow the rules allow the Gamma to switch around arbitrarily inside a big lattice of non-deterministic reduction choices!
+;; (e.g. step from (stdout ⟶ ["a" "c"]) to (stdout ⟶ ["a" "b" "c"]))
+;; and restoring the choice side condition eliminates that behavior.
+;; So clearly it plays a more subtle role here than I expected.
 
 
 (module+ test
@@ -163,7 +263,7 @@
   (check-true (redex-match? ddl Γ (term [(stdin ⟶ ["a" "b"])])))
   (check-true (redex-match? ddl state (term {{[stdin] [stdout] [([stdout] ← cat [stdin])]} ⊢ [(stdin ⟶ ["a" "b"]) (stdout ⟶ [])] [(stdin ⟶ []) (stdout ⟶ [])]})))
 
-  (check-true (redex-match? ddl [_ ... ([x_out ...] ← f [x_in_before ... x_k x_in_after ...]) _ ...] (term [([stdout] ← cat [stdin])])))
+  (check-true (redex-match? ddl [_ ... ([x_out ...] ← f [x_in_<k ... x_k x_in_>k ...]) _ ...] (term [([stdout] ← cat [stdin])])))
   (check-true (redex-match? ddl [_ ... (stdin ⟶ ["a" "b"]) _ ...] (term [(stdin ⟶ ["a" "b"]) (stdout ⟶ [])])))
   (check-true (redex-match? ddl [s_out_before_step ...] (term (bindings/Γ [(stdin ⟶ ["a" "b"]) (stdout ⟶ [])] [stdout]))))
   (check-true (redex-match? ddl [[]] (term (bindings/Γ [(stdin ⟶ ["a" "b"]) (stdout ⟶ [])] [stdout]))))
@@ -246,4 +346,28 @@
                     (p1     ⟶ ["a" "foo" ⊥])]
                    [(stdin  ⟶ ["a" "foo" ⊥])
                     (stdout ⟶ [])
-                    (p1     ⟶ ["a" "foo" ⊥])]})))
+                    (p1     ⟶ ["a" "foo" ⊥])]}))
+
+  (check-equal? (interleave '() '()) '())
+  (check-equal? (interleave '(1 2 3) '(a b c)) '(1 a 2 b 3 c))
+  (check-equal? (interleave '(1 2 3) '(a b c d e)) '(1 a 2 b 3 c d e))
+  (check-equal? (interleave '(1 2 3 4 5) '(a b c)) '(1 a 2 b 3 c 4 5))
+  (check-equal? (term (choice interleave [[] []]))
+                '(0))
+  (check-equal? (term (choice interleave [["a"] []]))
+                '(1))
+  (check-equal? (term (choice interleave [[] ["a"]])) ;; couldn't actually happen
+                '(0))
+  (check-equal? (term (choice interleave [[⊥] ["a"]]))
+                '(1))
+  (check-equal? (term (choice interleave [[⊥] ["a" "c"]]))
+                '(1))
+  (test-->> ddl-red
+            (term {{[stdin1 stdin2] [stdout] [([stdout] ← interleave [stdin1 stdin2])]}
+                   ⊢
+                   [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (stdout ⟶ [])]
+                   [(stdin1 ⟶ []) (stdin2 ⟶ []) (stdout ⟶ [])]})
+            (term {{[stdin1 stdin2] [stdout] [([stdout] ← interleave [stdin1 stdin2])]}
+                   ⊢
+                   [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (stdout ⟶ ["a" "c" "b" "d" ⊥])]
+                   [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (stdout ⟶ [])]})))
