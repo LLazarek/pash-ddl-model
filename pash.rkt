@@ -22,7 +22,10 @@
   [binding ::= (x ⟶ s)]
   [Γ ::= [binding ...]]
   [σ ::= [binding ...]]
-  [state ::= {P ⊢ Γ σ}])
+  [state ::= {P ⊢ Γ σ}]
+
+  #:binding-forms
+  {[x_I ...] #:exports (shadow x_I ...) O [([x_out ...] #:exports (shadow x_out ...) ← f vars) ...] #:refers-to (shadow x_I ... (shadow x_out ...) ...)})
 
 (define-metafunction ddl
   ;; ++ corresponds to \cdot in icfp'21
