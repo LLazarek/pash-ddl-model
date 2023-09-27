@@ -40,6 +40,13 @@
 
 (default-language ddl)
 
+
+
+
+;; -------------------- -------- --------------------
+;; -------------------- dynamics --------------------
+;; -------------------- -------- --------------------
+
 (define-metafunction ddl
   ;; ++ corresponds to \cdot in icfp'21
   ++ : s s -> s
@@ -198,7 +205,7 @@
                      more-r
                      (not left?))]))]))))
 
-(define-logger ddl)
+(define-logger ddlog)
 
 (define ddl-red
   (reduction-relation
@@ -217,41 +224,42 @@
           ...]}
 
         (where [_ ... ([x_out ...] ← f [x_in_<k ... x_k x_in_>k ...]) _ ...] E)
-        (side-condition (log-ddl-debug @~a{
-                                           E matches, with x_out... = @(term [x_out ...]), @;
-                                           x_k = @(term x_k)}))
+        (side-condition (log-ddlog-debug @~a{
+                                             E matches, with x_out... = @(term [x_out ...]), @;
+                                             x_k = @(term x_k)
+                                             }))
         (side-condition
-         (log-ddl-debug @~a{
-                            Checking that x_k is in the choice set of @(term f)... @;
-                            @(length (term (x_in_<k ...))) @;
-                            vs @(term (choice f (bindings/σ σ [x_in_<k ... x_k x_in_>k ...])))
-                            }))
+         (log-ddlog-debug @~a{
+                              Checking that x_k is in the choice set of @(term f)... @;
+                              @(length (term (x_in_<k ...))) @;
+                              vs @(term (choice f (bindings/σ σ [x_in_<k ... x_k x_in_>k ...])))
+                              }))
         ;; todo: see note below
         (side-condition (member (length (term (x_in_<k ...)))
                                 (term (choice f (bindings/σ σ [x_in_<k ... x_k x_in_>k ...])))))
 
         (where/error [_ ... (x_k ⟶ s_k) _ ...] Γ)
-        (side-condition (log-ddl-debug @~a{Γ matches, with s_k = @(term s_k)}))
+        (side-condition (log-ddlog-debug @~a{Γ matches, with s_k = @(term s_k)}))
         (where/error [binding_σ_<k ... (x_k ⟶ s_k_before_step) binding_σ_>k ...] σ)
         (side-condition
-         (log-ddl-debug @~a{σ matches, with s_k_before_step = @(term s_k_before_step)}))
+         (log-ddlog-debug @~a{σ matches, with s_k_before_step = @(term s_k_before_step)}))
         (where [msg_k_before_step ...] s_k_before_step)
         (where [msg_k_before_step ... msg-or-eof msg-or-eof_k_more ...] s_k) ;; there must be a new message in `s_k`, otherwise can't step
         (where/error s_x_k_step_message [msg-or-eof])
         (side-condition
-         (log-ddl-debug @~a{
-                            splitting of s_k matches, @;
-                            s_x_k_step_message = @(term s_x_k_step_message), @;
-                            and remaining after that: @(term [msg-or-eof_k_more ...])}))
+         (log-ddlog-debug @~a{
+                              splitting of s_k matches, @;
+                              s_x_k_step_message = @(term s_x_k_step_message), @;
+                              and remaining after that: @(term [msg-or-eof_k_more ...])}))
 
         (where/error [s_in_<k_σ ...] (bindings/σ σ [x_in_<k ...]))
         (where/error [s_in_>k_σ ...] (bindings/σ σ [x_in_>k ...]))
         (where/error [s_out_after_step ...] (run-f f [s_in_<k_σ ... (++ s_k_before_step s_x_k_step_message) s_in_>k_σ ...]))
         (side-condition
-         (log-ddl-debug @~a{
-                            ran @(term f) with the new s_x_k_step_message, @;
-                            new s_out_after_step = @(term [s_out_after_step ...])
-                            }))
+         (log-ddlog-debug @~a{
+                              ran @(term f) with the new s_x_k_step_message, @;
+                              new s_out_after_step = @(term [s_out_after_step ...])
+                              }))
         "step")))
 
 ;; The choice side condition is pretty subtle.
@@ -420,6 +428,13 @@
                     {[stdin] [stdout] [([stdout] ← cat [stdin])]}
                     [(stdin ⟶ ["a" "b"]) (stdout ⟶ ["a" "b"])]))))
 
+
+
+
+;; -------------------- ------------------- --------------------
+;; -------------------- DFG transformations --------------------
+;; -------------------- ------------------- --------------------
+
 ;; note: substitution subtlety here; only read vars are substituted.
 ;; todo: perhaps this can be fixed with a better binding forms declaration?
 (define-metafunction ddl
@@ -436,14 +451,16 @@
    (where x_fresh (unused I O [node ...]))
    ;; todo note: x_read can't be universally quantified here -- the paper seems to be missing this condition
    (where [_ ... x_read _ ...] (used/read I O [node ...]))
-   (side-condition ,(displayln @~a{Adding relay of @(term x_read)}))
    (where [node_subst ...] [(substitute/node node x_read x_fresh) ...])
    "relay-add"]
   [(aux-transform {I O [node_0 ... ([x_fresh] ← relay [x_read]) node_1 ...]}
                   {I O [node_0_subst ... node_1_subst ...]})
    (where [node_0_subst ...] [(substitute/node node_0 x_fresh x_read) ...])
    (where [node_1_subst ...] [(substitute/node node_1 x_fresh x_read) ...])
-   "relay-cut"])
+   "relay-cut"]
+
+  ;; todo: add rest
+  )
 
 (define-metafunction ddl
   used/read : I O E -> vars
