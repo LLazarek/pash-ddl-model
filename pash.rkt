@@ -2,6 +2,17 @@
 
 (require redex)
 
+;; todo: add task parallelism
+;;
+;; I think that actually the place that this must happen is in the ↑ compilation
+;; relation, because everything after operates on independent DFGs as separated
+;; by that relation. Specifically, I think the right approach is to add a rule
+;; like the `SeqBothBg`, but with these differences:
+;;
+;; 1. add one extra premise/constraint requiring that the intersection of
+;;    `outputs(p_1)` and `inputs(p_2)` is empty
+;; 2. remove the `bg` constraint on the compilation of `c_1` -- i.e. replace `bg` with `b`.
+
 (define-language ddl
   [P ::= {I O E}]
   [I O ::= vars]
