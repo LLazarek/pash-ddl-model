@@ -27,6 +27,8 @@
   #:binding-forms
   {[x_I ...] #:exports (shadow x_I ...) O [([x_out ...] #:exports (shadow x_out ...) ← f vars) ...] #:refers-to (shadow x_I ... (shadow x_out ...) ...)})
 
+(default-language ddl)
+
 (define-metafunction ddl
   ;; ++ corresponds to \cdot in icfp'21
   ++ : s s -> s
@@ -406,3 +408,55 @@
    (judgment-holds (complete?
                     {[stdin] [stdout] [([stdout] ← cat [stdin])]}
                     [(stdin ⟶ ["a" "b"]) (stdout ⟶ ["a" "b"])]))))
+
+;; note: substitution subtlety here; only read vars are substituted.
+;; todo: perhaps this can be fixed with a better binding forms declaration?
+(define-metafunction ddl
+  substitute/node : node x x -> node
+  [(substitute/node (vars_out ← f vars_in) x_from x_to)
+   (vars_out ← f (substitute vars_in x_from x_to))])
+
+(define-judgment-form ddl
+  #:mode (aux-transform I O)
+  #:contract (aux-transform P P)
+  ;; renamed from the paper: x_i ⟶ x_read, x_j ⟶ x_fresh
+  [(aux-transform {I O [node ...]}
+                  {I O [node_subst ... ([x_fresh] ← relay [x_read])]})
+   (where x_fresh (unused I O [node ...]))
+   ;; todo note: x_read can't be universally quantified here -- the paper seems to be missing this condition
+   (where [_ ... x_read _ ...] (used/read I O [node ...]))
+   (side-condition ,(displayln @~a{Adding relay of @(term x_read)}))
+   (where [node_subst ...] [(substitute/node node x_read x_fresh) ...])
+   "relay-add"]
+  [(aux-transform {I O [node_0 ... ([x_fresh] ← relay [x_read]) node_1 ...]}
+                  {I O [node_0_subst ... node_1_subst ...]})
+   (where [node_0_subst ...] [(substitute/node node_0 x_fresh x_read) ...])
+   (where [node_1_subst ...] [(substitute/node node_1 x_fresh x_read) ...])
+   "relay-cut"])
+
+(define-metafunction ddl
+  used/read : I O E -> vars
+  [(used/read [x_I ...] O [(vars ← f [x_in ...]) ...])
+   ,(remove-duplicates (term [x_I ... x_in ... ...]))])
+
+(define-metafunction ddl
+  unused : I O E -> x
+  [(unused I O E)
+   ,(gensym 'fresh)])
+
+(module+ test
+  (test-judgment-holds
+   (aux-transform {[stdin] [stdout] [([stdout] ← cat [stdin])]}
+                  {[stdin] [stdout] [([stdout] ← cat [x_fresh])
+                                     ([x_fresh] ← relay [stdin])]}))
+  (test-judgment-holds
+   (aux-transform {[stdin] [stdout] [([stdout] ← cat [x_fresh])
+                                     ([x_fresh] ← relay [stdin])]}
+                  {[stdin] [stdout] [([stdout] ← cat [stdin])]}))
+  (test-judgment-holds
+   (aux-transform {[stdin] [stdout] [([stdout] ← cat [x_fresh])
+                                     ([x_fresh] ← relay [stdin])]}
+                  {[stdin] [stdout] [([stdout] ← cat [x_fresh])
+                                     ([x_fresh] ← relay [x_fresh2])
+                                     ([x_fresh2] ← relay [stdin])]}))
+  )
