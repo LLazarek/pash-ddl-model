@@ -11,7 +11,8 @@
   [x f ::= variable-not-otherwise-mentioned]
 
   [e ::= (s* ← f s*)] ;; dynamic program terms with concrete streams
-  [s ::= [msg ... ⊥] [msg ...]]
+  [s ::= [msg ...] s⊥]
+  [s⊥ ::= [msg ... ⊥]]
   [msg ::= string]
   [msg-or-eof ::= msg ⊥]
   [s* ::= [s ...]]
@@ -154,9 +155,8 @@
                                        0)
                                    1))
                [,(interleave (term s_l) (term s_r))]}
-              {[[msg_done_l ... ⊥] [msg_done_r ... ⊥]]
-               [,(interleave (term [msg_done_l ... ⊥])
-                            (term [msg_done_r ... ⊥]))]}))
+              {[s⊥_l s⊥_r]
+               [,(interleave (term s⊥_l) (term s⊥_r))]}))
 
 (define (interleave l1 l2)
   (reverse
@@ -370,4 +370,36 @@
             (term {{[stdin1 stdin2] [stdout] [([stdout] ← interleave [stdin1 stdin2])]}
                    ⊢
                    [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (stdout ⟶ ["a" "c" "b" "d" ⊥])]
-                   [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (stdout ⟶ [])]})))
+                   [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (stdout ⟶ [])]}))
+
+  (test-->> ddl-red
+            (term {{[stdin1 stdin2] [stdout] [([stdout] ← interleave [stdin1 p1])
+                                              ([p1] ← cat [stdin2])]}
+                   ⊢
+                   [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (p1 ⟶ []) (stdout ⟶ [])]
+                   [(stdin1 ⟶ []) (stdin2 ⟶ []) (p1 ⟶ []) (stdout ⟶ [])]})
+            (term {{[stdin1 stdin2] [stdout] [([stdout] ← interleave [stdin1 p1])
+                                              ([p1] ← cat [stdin2])]}
+                   ⊢
+                   [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (p1 ⟶ ["c" "d" ⊥]) (stdout ⟶ ["a" "c" "b" "d" ⊥])]
+                   [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (p1 ⟶ ["c" "d" ⊥]) (stdout ⟶ [])]})))
+
+(define-relation ddl
+  complete? ⊆ P × Γ
+  [(complete? {_ _ [_ ... ([x_out ...] ← f [x_in ...]) _ ...]}
+              Γ)
+   (where [s⊥_in ...] (bindings/Γ Γ [x_in ...]))
+   (where [s⊥_out ...] (bindings/Γ Γ [x_out ...]))
+   (side-condition (equal? (term [s⊥_out ...])
+                           (term (run-f f [s⊥_in ...]))))])
+
+(module+ test
+  (test-judgment-holds
+   (complete?
+    {[stdin1 stdin2] [stdout] [([stdout] ← interleave [stdin1 p1])
+                               ([p1] ← cat [stdin2])]}
+    [(stdin1 ⟶ ["a" "b" ⊥]) (stdin2 ⟶ ["c" "d" ⊥]) (p1 ⟶ ["c" "d" ⊥]) (stdout ⟶ ["a" "c" "b" "d" ⊥])]))
+  (check-false
+   (judgment-holds (complete?
+                    {[stdin] [stdout] [([stdout] ← cat [stdin])]}
+                    [(stdin ⟶ ["a" "b"]) (stdout ⟶ ["a" "b"])]))))
